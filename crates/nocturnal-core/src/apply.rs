@@ -2,7 +2,7 @@
 //! every historical `(kind, v)` must apply forever, and replaying the same
 //! log always yields the same state (pinned by tests).
 
-use crate::event::{Envelope, Event};
+use crate::event::{Envelope, Event, Flavor, PlayerId};
 use crate::state::{
     AttendanceEntry, Auction, AuctionStatus, Bid, LogEntry, Player, Raid, State, TokenGrant,
 };
@@ -242,6 +242,8 @@ pub fn apply(state: &mut State, env: &Envelope) {
                     winners: Vec::new(),
                     cancelled_by: None,
                     cancelled_ts_ms: None,
+                    rolls: Vec::new(),
+                    roll_offs: Vec::new(),
                 },
             );
         }
@@ -304,6 +306,17 @@ pub fn apply(state: &mut State, env: &Envelope) {
             // winner at 0 DKP, so history says who got it, and the balance
             // stands. Auctions from before the flag existed always debit.
             let debit = g.auctions.get(auction_id).map_or(true, |a| a.debit_dkp);
+            // A roll auction (2026-09-30) never debits, whatever the flag,
+            // and its log line names the roll that won the item.
+            let rolled = g
+                .auctions
+                .get(auction_id)
+                .filter(|a| a.flavor == Flavor::Roll);
+            let debit = debit && rolled.is_none();
+            let notes: Vec<Option<String>> = winners
+                .iter()
+                .map(|w| rolled.and_then(|a| roll_note(a, w.player)))
+                .collect();
             // Attribute the loot to the raid it was won in, exactly like the
             // legacy `removeDKP(..., raid, item)` call. Without this the raid
             // summary and /dkphistory cannot say who won what.
@@ -319,14 +332,16 @@ pub fn apply(state: &mut State, env: &Envelope) {
             }
             // The debit lives in this fold step: a finalized winner is always
             // charged, atomically with the announcement fact (audit E2/#46).
-            for w in winners {
+            for (w, note) in winners.iter().zip(notes) {
                 let p = g.players.entry(w.player).or_insert_with(|| new_player(ts));
                 let charged = if debit { w.amount } else { 0 };
                 p.balance -= charged;
                 p.log.push(LogEntry {
                     dkp: -charged,
                     comment: item.as_ref().map_or_else(String::new, |i| {
-                        if debit {
+                        if let Some(note) = &note {
+                            format!("{} ({note})", i.name)
+                        } else if debit {
                             i.name.clone()
                         } else {
                             format!("{} (free auction)", i.name)
@@ -336,6 +351,30 @@ pub fn apply(state: &mut State, env: &Envelope) {
                     raid: raid_ref.clone(),
                     item: item.clone(),
                 });
+            }
+        }
+
+        Event::AuctionRolled {
+            auction_id,
+            player,
+            roll,
+            ..
+        } => {
+            if let Some(a) = g.auctions.get_mut(auction_id) {
+                // One roll per player: decide refuses a second, and a log
+                // that somehow held one keeps the first.
+                if !a.rolls.iter().any(|r| r.player == *player) {
+                    a.rolls.push(crate::event::Roll {
+                        player: *player,
+                        roll: *roll,
+                    });
+                }
+            }
+        }
+
+        Event::AuctionRollOff { auction_id, rounds } => {
+            if let Some(a) = g.auctions.get_mut(auction_id) {
+                a.roll_offs = rounds.clone();
             }
         }
 
@@ -428,6 +467,21 @@ pub fn apply(state: &mut State, env: &Envelope) {
             g.telemetry.remove(username);
         }
     }
+}
+
+/// What a roll auction's log line says about how `player` won: the roll,
+/// and the last roll-off roll when a tie had to be settled.
+fn roll_note(a: &Auction, player: PlayerId) -> Option<String> {
+    let roll = a.rolls.iter().find(|r| r.player == player)?.roll;
+    let off = a
+        .roll_offs
+        .iter()
+        .rev()
+        .find_map(|round| round.iter().find(|r| r.player == player));
+    Some(match off {
+        Some(o) => format!("roll auction: rolled {roll}, roll-off {}", o.roll),
+        None => format!("roll auction: rolled {roll}"),
+    })
 }
 
 fn new_player(ts_ms: i64) -> Player {

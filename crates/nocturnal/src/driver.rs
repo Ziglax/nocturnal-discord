@@ -138,6 +138,7 @@ fn sample_gauges(store: &nocturnal_store::Store, ledger: &Ledger, metrics: &Metr
     }
     let mut short = 0u64;
     let mut long = 0u64;
+    let mut roll = 0u64;
     let mut raids = 0u64;
     for guild in ledger.state().guilds.values() {
         if guild.active_raid.is_some() {
@@ -148,6 +149,7 @@ fn sample_gauges(store: &nocturnal_store::Store, ledger: &Ledger, metrics: &Metr
                 match auction.flavor {
                     nocturnal_core::event::Flavor::Short => short += 1,
                     nocturnal_core::event::Flavor::Long => long += 1,
+                    nocturnal_core::event::Flavor::Roll => roll += 1,
                 }
             }
         }
@@ -164,6 +166,13 @@ fn sample_gauges(store: &nocturnal_store::Store, ledger: &Ledger, metrics: &Metr
         &[opentelemetry::KeyValue::new(
             attr::NOCTURNAL_AUCTION_FLAVOR,
             "long",
+        )],
+    );
+    metrics.auctions_active.record(
+        roll,
+        &[opentelemetry::KeyValue::new(
+            attr::NOCTURNAL_AUCTION_FLAVOR,
+            "roll",
         )],
     );
     metrics.raids_active.record(raids, &[]);

@@ -16,11 +16,11 @@ pub mod who;
 
 pub use apply::apply;
 pub use command::{Command, Ctx};
-pub use decide::{compute_winners, decide, CLASSES};
+pub use decide::{compute_roll_winners, compute_winners, decide, CLASSES};
 pub use event::pretty_character_name;
 pub use event::{
     Actor, Envelope, Event, Flavor, GuildId, Item, KillEvidence, MainRank, PlayerId, ProfileSource,
-    RaidKill, RosterCharacter, Secret,
+    RaidKill, Roll, RosterCharacter, Secret,
 };
 pub use reject::Rejection;
 pub use state::State;

@@ -46,6 +46,8 @@ pub enum Action {
     /// character on a side (character bids). Its value is the character.
     PickMain,
     PickAlt,
+    /// A roll auction's "I want to roll" button.
+    Roll,
 }
 
 impl Action {
@@ -57,6 +59,7 @@ impl Action {
             Action::Confirm => "confirm",
             Action::PickMain => "pickm",
             Action::PickAlt => "picka",
+            Action::Roll => "roll",
         }
     }
 
@@ -68,6 +71,7 @@ impl Action {
             "confirm" => Some(Action::Confirm),
             "pickm" => Some(Action::PickMain),
             "picka" => Some(Action::PickAlt),
+            "roll" => Some(Action::Roll),
             _ => None,
         }
     }
@@ -173,10 +177,72 @@ fn bids_text(auction: &Auction) -> String {
     )
 }
 
+/// A roll auction's rolls, highest first; equal rolls keep the order they
+/// landed in. Unlike bids they are shown with names: a roll cannot be
+/// outbid, so seeing them land is the fun of it, not a leak.
+fn rolls_text(auction: &Auction) -> String {
+    let mut rolls: Vec<&nocturnal_core::Roll> = auction.rolls.iter().collect();
+    rolls.sort_by_key(|r| std::cmp::Reverse(r.roll));
+    field_lines(
+        rolls
+            .iter()
+            .map(|r| format!("<@{}> - **{}**", r.player, r.roll))
+            .collect(),
+        "No rolls yet",
+    )
+}
+
+/// A roll auction's winners, each with the roll that won the item and, when
+/// a tie across the cut was rolled off, the roll-off roll that settled it.
+fn roll_winners_text(auction: &Auction) -> String {
+    field_lines(
+        auction
+            .winners
+            .iter()
+            .map(|w| {
+                let mut line = format!("<@{}>", w.player);
+                if let Some(r) = auction.rolls.iter().find(|r| r.player == w.player) {
+                    line.push_str(&format!(" rolled **{}**", r.roll));
+                }
+                let off = auction
+                    .roll_offs
+                    .iter()
+                    .rev()
+                    .find_map(|round| round.iter().find(|r| r.player == w.player));
+                if let Some(o) = off {
+                    line.push_str(&format!(" (roll-off **{}**)", o.roll));
+                }
+                line
+            })
+            .collect(),
+        "No winner",
+    )
+}
+
+/// The roll-off that settled a tie across the cut, one line per round.
+fn roll_off_text(auction: &Auction) -> String {
+    field_lines(
+        auction
+            .roll_offs
+            .iter()
+            .enumerate()
+            .map(|(i, round)| {
+                let rolls: Vec<String> = round
+                    .iter()
+                    .map(|r| format!("<@{}> **{}**", r.player, r.roll))
+                    .collect();
+                format!("Round {}: {}", i + 1, rolls.join(", "))
+            })
+            .collect(),
+        "",
+    )
+}
+
 /// The live (bidding) message — legacy `sendAuctionStartEmbed` /
 /// `sendLongAuctionEmbed`: short auctions are orange with a single "Auction
 /// ends" field and the three bid buttons; long auctions are blue, carry the
-/// auction id to bid against, and have no buttons at all.
+/// auction id, and have the two bid buttons. A roll auction (2026-09-30) is
+/// laid out like a long one, with its rolls as they land and one button.
 pub fn live_message(
     auction_id: &str,
     auction: &Auction,
@@ -259,7 +325,52 @@ pub fn live_message(
             ]);
             (content, embed, vec![row])
         }
+        Flavor::Roll => {
+            let content = format!(
+                "Roll auction started - press **I want to roll** to roll 1-100. {} at <t:{}:f>, \
+                 a tie is rolled off. **No DKP is spent.**",
+                if auction.num_items > 1 {
+                    format!("The top **{}** rolls win", auction.num_items)
+                } else {
+                    "The highest roll wins".to_owned()
+                },
+                ts_sec(auction.deadline_ts_ms)
+            );
+            let embed = roll_embed(auction_id, auction).field("Rolls", rolls_text(auction), false);
+            let row = serenity::CreateActionRow::Buttons(vec![serenity::CreateButton::new(
+                custom_id(Action::Roll, auction_id),
+            )
+            .label("I want to roll")
+            .style(serenity::ButtonStyle::Primary)]);
+            (content, embed, vec![row])
+        }
     }
+}
+
+/// The head every roll auction embed shares: the item in blue, its id and
+/// its deadline.
+fn roll_embed(auction_id: &str, auction: &Auction) -> serenity::CreateEmbed {
+    item_embed(&auction.item, EMBED_BLUE)
+        .field("Auction ID", format!("```{auction_id}```"), true)
+        .field(
+            "Auction ends",
+            format!("<t:{}:R>", ts_sec(auction.deadline_ts_ms)),
+            true,
+        )
+}
+
+/// A roll auction past its deadline, for the moment before the scheduler
+/// draws it: the rolls stand and the button goes. There is no officer
+/// confirm to wait for, and no preview of the winner either, because a
+/// roll-off drawn here could differ from the one the ledger records.
+pub fn roll_closed_message(
+    auction_id: &str,
+    auction: &Auction,
+) -> (serenity::CreateEmbed, Vec<serenity::CreateActionRow>) {
+    let embed = roll_embed(auction_id, auction)
+        .field("Winner/s", "Drawing the winner…", false)
+        .field("Rolls", rolls_text(auction), false);
+    (embed, Vec::new())
 }
 
 /// Closed short auction: winners proposed, awaiting the officer's confirm
@@ -327,6 +438,23 @@ pub fn settled_message(
             .style(serenity::ButtonStyle::Danger)
             .disabled(true)]);
             (embed, vec![row])
+        }
+        _ if auction.flavor == Flavor::Roll => {
+            // Drawn by the scheduler at the deadline: nothing was confirmed
+            // or charged, so there is no status button to leave behind.
+            let mut embed = item_embed(&auction.item, EMBED_GREEN)
+                .field("Auction ID", format!("```{auction_id}```"), true)
+                .field(
+                    "Auction ends",
+                    format!("<t:{}:R>", ts_sec(auction.deadline_ts_ms)),
+                    true,
+                )
+                .field("Winner/s", roll_winners_text(auction), false)
+                .field("Rolls", rolls_text(auction), false);
+            if !auction.roll_offs.is_empty() {
+                embed = embed.field("Roll-off", roll_off_text(auction), false);
+            }
+            (embed, Vec::new())
         }
         _ => {
             let mut embed = item_embed(&auction.item, EMBED_GREEN);
@@ -435,6 +563,9 @@ pub async fn refresh(
             let (_, embed, rows) = live_message(auction_id, &auction);
             (embed, rows)
         }
+        AuctionStatus::Closed if auction.flavor == Flavor::Roll => {
+            roll_closed_message(auction_id, &auction)
+        }
         AuctionStatus::Closed => {
             let aid = auction_id.to_owned();
             // Winners, and the roster class of every winner's character,
@@ -537,7 +668,7 @@ pub async fn repost_open_auctions(
                 .filter_map(|(id, a)| {
                     let channel = match a.flavor {
                         Flavor::Short => short,
-                        Flavor::Long => long,
+                        Flavor::Long | Flavor::Roll => long,
                     }?;
                     Some((id.clone(), a.clone(), channel))
                 })
@@ -736,7 +867,7 @@ async fn open_auction(
         .await;
     let channel = match flavor {
         Flavor::Short => short_channel,
-        Flavor::Long => long_channel.or(short_channel),
+        Flavor::Long | Flavor::Roll => long_channel.or(short_channel),
     };
     let Some(channel) = channel else {
         ctx.say(":no_entry: Auction channel not set, use /configure to set it")
@@ -917,6 +1048,64 @@ pub async fn startlongbid(
     .await
 }
 
+/// Start a roll auction (highest 1-100 roll wins, no DKP).
+#[tracing::instrument(name = "command.rollauction", skip_all, err, fields(otel.kind = "server"))]
+#[poise::command(
+    slash_command,
+    ephemeral,
+    rename = "rollauction",
+    check = "officer_check"
+)]
+pub async fn rollauction(
+    ctx: Context<'_>,
+    #[description = "Item name or id"] search: String,
+    #[description = "Number of items"]
+    #[min = 1]
+    numitems: Option<u32>,
+    #[description = "Hours of rolling (default: the bid time of a normal auction)"]
+    #[min = 1]
+    duration: Option<i64>,
+    #[description = "quarm | takp"] database: Option<String>,
+) -> Result<(), Error> {
+    let ledger_guild = require_guild(&ctx)?;
+    crate::discord::ack_ephemeral(&ctx).await?;
+    let Some(item) = pick_item(&ctx, &search, database).await? else {
+        return Ok(());
+    };
+    if !confirm_start(&ctx, &item).await? {
+        return Ok(());
+    }
+    // Ziglax, 2026-09-30: without hours, a roll lasts as long as a /startbid
+    // auction, the configured bid time.
+    let duration_ms = match duration {
+        Some(hours) => hours * 3_600_000,
+        None => {
+            let bid_time_s = ctx
+                .data()
+                .driver
+                .query(move |l| {
+                    l.state()
+                        .guild(ledger_guild)
+                        .map_or(60, |g| g.config.bid_time_s)
+                })
+                .await;
+            bid_time_s * 1000
+        }
+    };
+    // Ziglax, 2026-09-30: a long auction won by a /random 100 instead of a
+    // bid. The ledger records no minimum and no debit whatever is passed.
+    open_auction(
+        &ctx,
+        item,
+        Flavor::Roll,
+        Some(0),
+        numitems,
+        duration_ms,
+        false,
+    )
+    .await
+}
+
 /// Show the details of an auction.
 #[tracing::instrument(name = "command.auctiondetails", skip_all, err, fields(otel.kind = "server"))]
 #[poise::command(
@@ -987,6 +1176,34 @@ pub async fn auctiondetails(
             (None, Some(ts)) => format!("Cancelled by the bot <t:{}:R>\n", ts / 1000),
             _ => "Cancelled\n".to_owned(),
         });
+    }
+    if auction.flavor == Flavor::Roll {
+        // No bids and no amounts: who won, the roll-off, then the rolls. The
+        // result goes first because a roll is free, so the rolls can outgrow
+        // the message, and the cut must never take the winner with it.
+        if auction.status == AuctionStatus::Finalized {
+            body.push_str("Winners:\n");
+            body.push_str(&roll_winners_text(&auction));
+            body.push('\n');
+        }
+        for (i, round) in auction.roll_offs.iter().enumerate() {
+            body.push_str(&format!("Roll-off round {}:\n", i + 1));
+            for r in round {
+                body.push_str(&format!("- <@{}> - {}\n", r.player, r.roll));
+            }
+        }
+        body.push_str("Rolls:\n");
+        for (i, r) in auction.rolls.iter().enumerate() {
+            let line = format!("- <@{}> - {}\n", r.player, r.roll);
+            let tail = format!("…and {} more\n", auction.rolls.len() - i);
+            if body.len() + line.len() + tail.len() > 1900 {
+                body.push_str(&tail);
+                break;
+            }
+            body.push_str(&line);
+        }
+        ctx.say(body.chars().take(1900).collect::<String>()).await?;
+        return Ok(());
     }
     body.push_str("Bids:\n");
     for b in &auction.bids {
@@ -1207,16 +1424,28 @@ pub async fn endauction(
     )
     .await;
     let auction = find_auction(&ctx, &auctionid).await?;
+    let rolled = auction.as_ref().is_some_and(|a| a.flavor == Flavor::Roll);
     let winners = auction
         .as_ref()
-        .map(|a| winners_text(&a.winners))
+        .map(|a| {
+            if rolled {
+                roll_winners_text(a)
+            } else {
+                winners_text(&a.winners)
+            }
+        })
         .unwrap_or_else(|| "none".to_owned());
     ctx.say(if shown {
         format!("`{auctionid}` closed and settled.\nWinner/s:\n{winners}")
     } else {
         format!(
             ":warning: `{auctionid}` closed and settled, but its post could not be updated — \
-             nobody was told in the channel. The DKP has already moved.\nWinner/s:\n{winners}"
+             nobody was told in the channel. {}\nWinner/s:\n{winners}",
+            if rolled {
+                "The winner is already drawn."
+            } else {
+                "The DKP has already moved."
+            }
         )
     })
     .await?;
@@ -1227,6 +1456,7 @@ pub fn commands() -> Vec<poise::Command<crate::discord::Data, Error>> {
     vec![
         startbid(),
         startlongbid(),
+        rollauction(),
         auctiondetails(),
         cancelauction(),
         endauction(),
@@ -2088,6 +2318,52 @@ pub async fn handle_component(
             .await;
             Ok(())
         }
+        Action::Roll => {
+            // The click's own snowflake is the seed: unique per click, out of
+            // the member's hands, and recorded in the event so the roll replays
+            // from the log. The ledger refuses a second roll and a closed
+            // auction, so no status check is needed here.
+            let outcome = data
+                .driver
+                .execute(
+                    ledger_guild,
+                    Actor::User(interaction.user.id.get()),
+                    Command::RollForAuction {
+                        auction_id: auction_id.to_owned(),
+                        player: interaction.user.id.get(),
+                        seed: interaction.id.get(),
+                    },
+                )
+                .await;
+            let text = match &outcome {
+                Ok(envelopes) => envelopes
+                    .iter()
+                    .find_map(|e| match &e.event {
+                        nocturnal_core::Event::AuctionRolled { roll, .. } => {
+                            Some(format!(":game_die: You rolled **{roll}** (1-100)."))
+                        }
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| "Roll recorded.".to_owned()),
+                Err(e) => rejection_text(e),
+            };
+            // The clicker hears first: every roll edits the same embed, and in
+            // a burst of clicks those edits queue behind the channel's rate
+            // limit, where the private answer does not. The roll still lands
+            // on the embed for everyone even if that answer failed.
+            let replied = reply(ctx, interaction, text).await;
+            if outcome.is_ok() {
+                refresh(
+                    ctx.http.as_ref(),
+                    &data.auctions,
+                    &data.driver,
+                    ledger_guild,
+                    auction_id,
+                )
+                .await;
+            }
+            replied
+        }
     }
 }
 
@@ -2114,7 +2390,13 @@ mod tests {
 
     #[test]
     fn custom_ids_round_trip() {
-        for action in [Action::Bid, Action::BidAlt, Action::Cancel, Action::Confirm] {
+        for action in [
+            Action::Bid,
+            Action::BidAlt,
+            Action::Cancel,
+            Action::Confirm,
+            Action::Roll,
+        ] {
             let id = custom_id(action, "au-1234abcd");
             assert!(id.len() <= 100, "Discord custom_id limit");
             assert_eq!(parse_custom_id(&id), Some((action, "au-1234abcd", None)));
@@ -2141,6 +2423,8 @@ mod tests {
             winners: Vec::new(),
             cancelled_by: None,
             cancelled_ts_ms: None,
+            rolls: Vec::new(),
+            roll_offs: Vec::new(),
             debit_dkp: true,
         }
     }
@@ -2232,6 +2516,98 @@ mod tests {
         let json = serde_json::to_value(&rows).expect("rows serialize");
         assert_eq!(json[0]["components"][0]["custom_id"], "nb:confirm:au-3");
         assert_eq!(json[0]["components"][0]["label"], "Confirm anyway");
+    }
+
+    /// A roll auction has one button and nothing to type: the click is the
+    /// roll, and the message says up front that no DKP is spent.
+    #[test]
+    fn live_roll_auction_offers_one_roll_button() {
+        let (content, _, rows) = live_message("au-4", &sample_auction(Flavor::Roll));
+        assert!(content.contains("No DKP is spent"), "{content}");
+        assert!(!content.contains("minimum bid"), "{content}");
+        let json = serde_json::to_value(&rows).expect("rows serialize");
+        let buttons = json[0]["components"].as_array().expect("button row");
+        assert_eq!(buttons.len(), 1, "{buttons:?}");
+        assert_eq!(buttons[0]["custom_id"], "nb:roll:au-4");
+        assert_eq!(buttons[0]["label"], "I want to roll");
+    }
+
+    /// The rolls are public as they land, highest first, with who rolled.
+    #[test]
+    fn live_roll_auction_shows_the_rolls_highest_first() {
+        use nocturnal_core::Roll;
+        let mut auction = sample_auction(Flavor::Roll);
+        auction.rolls = vec![
+            Roll {
+                player: 7,
+                roll: 12,
+            },
+            Roll {
+                player: 8,
+                roll: 88,
+            },
+        ];
+        let (_, embed, _) = live_message("au-4", &auction);
+        let e = serde_json::to_value(&embed).expect("embed serializes");
+        let fields = e["fields"].as_array().expect("fields");
+        let rolls = fields
+            .iter()
+            .find(|f| f["name"] == "Rolls")
+            .expect("a Rolls field");
+        assert_eq!(rolls["value"], "<@8> - **88**\n<@7> - **12**");
+    }
+
+    /// A drawn roll auction names the winner with the roll that won and the
+    /// roll-off that settled the tie, and leaves no button behind.
+    #[test]
+    fn a_drawn_roll_auction_names_the_winner_and_the_roll_off() {
+        use nocturnal_core::Roll;
+        let mut auction = sample_auction(Flavor::Roll);
+        auction.status = AuctionStatus::Finalized;
+        auction.rolls = vec![
+            Roll {
+                player: 7,
+                roll: 90,
+            },
+            Roll {
+                player: 8,
+                roll: 90,
+            },
+        ];
+        auction.roll_offs = vec![vec![
+            Roll {
+                player: 7,
+                roll: 33,
+            },
+            Roll {
+                player: 8,
+                roll: 61,
+            },
+        ]];
+        auction.winners = vec![nocturnal_core::event::Winner {
+            player: 8,
+            amount: 0,
+            for_main: true,
+            character: None,
+        }];
+        let (embed, rows) = super::settled_message("au-4", &auction);
+        assert!(rows.is_empty(), "nothing to confirm on a roll auction");
+        let e = serde_json::to_value(&embed).expect("embed serializes");
+        let fields = e["fields"].as_array().expect("fields");
+        let field = |name: &str| {
+            fields
+                .iter()
+                .find(|f| f["name"] == name)
+                .map(|f| f["value"].clone())
+        };
+        assert_eq!(
+            field("Winner/s"),
+            Some(serde_json::json!("<@8> rolled **90** (roll-off **61**)"))
+        );
+        assert_eq!(
+            field("Roll-off"),
+            Some(serde_json::json!("Round 1: <@7> **33**, <@8> **61**"))
+        );
     }
 
     /// End to end over a real ledger and WAL, minus Discord: the same

@@ -45,6 +45,17 @@ pub struct RaidRef {
 pub enum Flavor {
     Short,
     Long,
+    /// `/rollauction` (2026-09-30): no bids and no DKP. Each member rolls
+    /// 1–100 once, the rolls show as they land, and the highest roll wins
+    /// at the deadline; a tie across the cut is rolled off.
+    Roll,
+}
+
+/// One 1–100 roll on a roll auction, or in its roll-off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Roll {
+    pub player: PlayerId,
+    pub roll: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -411,6 +422,24 @@ pub enum Event {
     },
     #[serde(rename = "auction.cancelled")]
     AuctionCancelled { auction_id: String, reason: String },
+    /// A member's roll on a roll auction (2026-09-30). `roll` is the d100
+    /// drawn from `seed`, both recorded so a dispute reads the log, not a
+    /// replay. One per player per auction.
+    #[serde(rename = "auction.rolled")]
+    AuctionRolled {
+        auction_id: String,
+        player: PlayerId,
+        roll: u32,
+        seed: u64,
+    },
+    /// The roll-off that settled a tie across a roll auction's cut, round by
+    /// round, drawn from the seed of the `auction.finalized` that follows it
+    /// in the same decision.
+    #[serde(rename = "auction.roll_off")]
+    AuctionRollOff {
+        auction_id: String,
+        rounds: Vec<Vec<Roll>>,
+    },
 
     // -- roster (absorbed from nocturnal-roster-bot, 2026-08-31) --------------
     #[serde(rename = "roster.character.set")]
@@ -505,6 +534,8 @@ impl Event {
             Event::AuctionClosed { .. } => "auction.closed",
             Event::AuctionFinalized { .. } => "auction.finalized",
             Event::AuctionCancelled { .. } => "auction.cancelled",
+            Event::AuctionRolled { .. } => "auction.rolled",
+            Event::AuctionRollOff { .. } => "auction.roll_off",
             Event::RosterCharacterSet { .. } => "roster.character.set",
             Event::RosterCharacterRemoved { .. } => "roster.character.removed",
             Event::RosterProfileUploaded { .. } => "roster.profile.uploaded",

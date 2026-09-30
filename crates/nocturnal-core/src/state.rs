@@ -93,6 +93,10 @@ pub struct Auction {
     /// a cancel the scheduler made on its own.
     pub cancelled_by: Option<PlayerId>,
     pub cancelled_ts_ms: Option<i64>,
+    /// A roll auction's rolls, in the order they landed (one per player).
+    pub rolls: Vec<crate::event::Roll>,
+    /// The roll-off that settled a tie across the cut, round by round.
+    pub roll_offs: Vec<Vec<crate::event::Roll>>,
 }
 
 /// Per-guild behavioural config with the *fixed* defaults (audit S9: the

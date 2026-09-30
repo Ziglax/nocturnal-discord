@@ -1298,6 +1298,12 @@ pub fn rejection_text(e: &ExecError) -> String {
         R::AuctionNotActive => ":no_entry: Bidding on this auction has closed".to_owned(),
         R::AuctionNotClosed => ":no_entry: This auction is not awaiting confirmation".to_owned(),
         R::AuctionIdTaken => ":no_entry: That auction id already exists".to_owned(),
+        R::WrongAuctionFlavor => {
+            ":no_entry: Wrong kind of auction: a roll auction takes rolls, not bids".to_owned()
+        }
+        R::AlreadyRolled { roll } => {
+            format!(":no_entry: One roll each: you already rolled **{roll}** on this auction")
+        }
         R::RaidAlreadyActive { name } => {
             format!(":no_entry: There is already an active raid: {name}")
         }

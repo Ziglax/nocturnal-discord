@@ -2,9 +2,9 @@
 //! the events it becomes. Pure — same inputs, same output, no I/O, no clock,
 //! no RNG beyond the seed carried by the command.
 
-use crate::auction::{winners, Rng};
+use crate::auction::{roll_winners, winners, Rng};
 use crate::command::{Command, Ctx};
-use crate::event::{Actor, ConfigPatch, Event, MainRank, RaidRef, Winner};
+use crate::event::{Actor, ConfigPatch, Event, Flavor, MainRank, RaidRef, Roll, Winner};
 use crate::reject::Rejection;
 use crate::state::{AuctionStatus, Bid, State};
 
@@ -237,16 +237,20 @@ pub fn decide(state: &State, ctx: &Ctx, cmd: &Command) -> Result<Vec<Event>, Rej
             if *min_bid < 0 || *duration_ms <= 0 {
                 return Err(Rejection::InvalidAmount);
             }
+            // A roll auction has no bids and moves no DKP: whatever the
+            // request carried, the fact records none of the bid knobs.
+            let roll = *flavor == Flavor::Roll;
+            let knob = |v: i64| if roll { 0 } else { v };
             Ok(vec![Event::AuctionOpened {
                 auction_id: auction_id.clone(),
                 item: item.clone(),
                 flavor: *flavor,
-                min_bid: *min_bid,
+                min_bid: knob(*min_bid),
                 num_items: (*num_items).max(1),
-                min_bid_to_lock_for_main: *min_bid_to_lock_for_main,
-                over_bid_to_win_main: *over_bid_to_win_main,
+                min_bid_to_lock_for_main: knob(*min_bid_to_lock_for_main),
+                over_bid_to_win_main: knob(*over_bid_to_win_main),
                 deadline_ts_ms: ctx.now_ms + *duration_ms,
-                debit_dkp: *debit_dkp,
+                debit_dkp: *debit_dkp && !roll,
             }])
         }
 
@@ -261,6 +265,9 @@ pub fn decide(state: &State, ctx: &Ctx, cmd: &Command) -> Result<Vec<Event>, Rej
                 .auctions
                 .get(auction_id)
                 .ok_or(Rejection::AuctionNotFound)?;
+            if auction.flavor == Flavor::Roll {
+                return Err(Rejection::WrongAuctionFlavor);
+            }
             if auction.status != AuctionStatus::Open {
                 return Err(Rejection::AuctionNotActive);
             }
@@ -399,10 +406,51 @@ pub fn decide(state: &State, ctx: &Ctx, cmd: &Command) -> Result<Vec<Event>, Rej
             if auction.status != AuctionStatus::Closed {
                 return Err(Rejection::AuctionNotClosed);
             }
-            let winners = compute_winners(g, auction_id, *seed);
-            Ok(vec![Event::AuctionFinalized {
+            let finalized = |winners| Event::AuctionFinalized {
                 auction_id: auction_id.clone(),
                 winners,
+                seed: *seed,
+            };
+            if auction.flavor == Flavor::Roll {
+                // The roll-off, when a tie straddled the cut, is its own
+                // fact ahead of the close, drawn from the close's seed.
+                let (winners, rounds) = compute_roll_winners(g, auction_id, *seed);
+                let mut events = Vec::with_capacity(2);
+                if !rounds.is_empty() {
+                    events.push(Event::AuctionRollOff {
+                        auction_id: auction_id.clone(),
+                        rounds,
+                    });
+                }
+                events.push(finalized(winners));
+                return Ok(events);
+            }
+            Ok(vec![finalized(compute_winners(g, auction_id, *seed))])
+        }
+
+        Command::RollForAuction {
+            auction_id,
+            player,
+            seed,
+        } => {
+            let auction = g
+                .auctions
+                .get(auction_id)
+                .ok_or(Rejection::AuctionNotFound)?;
+            if auction.flavor != Flavor::Roll {
+                return Err(Rejection::WrongAuctionFlavor);
+            }
+            if auction.status != AuctionStatus::Open {
+                return Err(Rejection::AuctionNotActive);
+            }
+            g.players.get(player).ok_or(Rejection::PlayerNotFound)?;
+            if let Some(r) = auction.rolls.iter().find(|r| r.player == *player) {
+                return Err(Rejection::AlreadyRolled { roll: r.roll });
+            }
+            Ok(vec![Event::AuctionRolled {
+                auction_id: auction_id.clone(),
+                player: *player,
+                roll: Rng::new(*seed).d100(),
                 seed: *seed,
             }])
         }
@@ -810,6 +858,9 @@ pub fn compute_winners(g: &crate::state::GuildState, auction_id: &str, seed: u64
     let Some(auction) = g.auctions.get(auction_id) else {
         return Vec::new();
     };
+    if auction.flavor == Flavor::Roll {
+        return compute_roll_winners(g, auction_id, seed).0;
+    }
     let valid: Vec<Bid> = auction
         .bids
         .iter()
@@ -836,4 +887,34 @@ pub fn compute_winners(g: &crate::state::GuildState, auction_id: &str, seed: u64
         character: b.character.clone(),
     })
     .collect()
+}
+
+/// A roll auction's winners (at 0 DKP) and the roll-off rounds that settled
+/// a tie across the cut, drawn from the close's `seed`. Shared by finalize
+/// and the Discord layer, like [`compute_winners`].
+pub fn compute_roll_winners(
+    g: &crate::state::GuildState,
+    auction_id: &str,
+    seed: u64,
+) -> (Vec<Winner>, Vec<Vec<Roll>>) {
+    let Some(auction) = g.auctions.get(auction_id) else {
+        return (Vec::new(), Vec::new());
+    };
+    let (players, rounds) = roll_winners(
+        &auction.rolls,
+        auction.num_items as usize,
+        &mut Rng::new(seed),
+    );
+    let winners = players
+        .into_iter()
+        .map(|player| Winner {
+            player,
+            amount: 0,
+            // A roll has no main/alt side; main is the default every other
+            // reader already treats as "no remark" (no " - alter" suffix).
+            for_main: true,
+            character: None,
+        })
+        .collect();
+    (winners, rounds)
 }
