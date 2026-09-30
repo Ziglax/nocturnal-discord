@@ -114,6 +114,13 @@ pub enum Command {
         auction_id: String,
         reason: String,
     },
+    /// `/rollauction`'s "I want to roll" button: one d100 per player, drawn
+    /// from `seed` (the driver's entropy, like `FinalizeAuction`'s).
+    RollForAuction {
+        auction_id: String,
+        player: PlayerId,
+        seed: u64,
+    },
     UpdateConfig {
         patch: ConfigPatch,
     },
@@ -201,6 +208,7 @@ impl Command {
             Command::CloseAuction { .. } => "close_auction",
             Command::FinalizeAuction { .. } => "finalize_auction",
             Command::CancelAuction { .. } => "cancel_auction",
+            Command::RollForAuction { .. } => "roll_for_auction",
             Command::UpdateConfig { .. } => "update_config",
             Command::SetRosterCharacter { .. } => "set_roster_character",
             Command::RankRosterCharacter { .. } => "rank_roster_character",

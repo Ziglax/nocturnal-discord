@@ -45,6 +45,13 @@ pub enum Rejection {
     BidBelowMinimum {
         min_bid: i64,
     },
+    /// A bid on a roll auction, or a roll on a bidding one (2026-09-30).
+    WrongAuctionFlavor,
+    /// A second roll on the same roll auction; carries the first so the
+    /// member is shown the roll that stands.
+    AlreadyRolled {
+        roll: u32,
+    },
     /// The guild requires a raid-attendance percentage to bid on this side
     /// (`mainbidminra` / `altbidminra`), and the player is under it.
     AttendanceBelowMinimum {
@@ -121,6 +128,8 @@ impl Rejection {
             Rejection::AuctionNotActive => "auction_not_active",
             Rejection::AuctionNotClosed => "auction_not_closed",
             Rejection::BidBelowMinimum { .. } => "bid_below_minimum",
+            Rejection::WrongAuctionFlavor => "wrong_auction_flavor",
+            Rejection::AlreadyRolled { .. } => "already_rolled",
             Rejection::AttendanceBelowMinimum { .. } => "attendance_below_minimum",
             Rejection::CharacterNotEligible { .. } => "character_not_eligible",
             Rejection::CharacterBelowMinLevel { .. } => "character_below_min_level",

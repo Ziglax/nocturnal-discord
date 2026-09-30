@@ -6,7 +6,7 @@
 
 use nocturnal_core::event::{
     Actor, ConfigPatch, Envelope, Event, Flavor, ImportedAttendance, ImportedLogEntry, Item,
-    RaidRef, Winner,
+    RaidRef, Roll, Winner,
 };
 
 fn item() -> Item {
@@ -144,6 +144,25 @@ fn samples() -> Vec<Event> {
             auction_id: "a".into(),
             reason: "officer".into(),
         },
+        Event::AuctionRolled {
+            auction_id: "a".into(),
+            player: 1,
+            roll: 87,
+            seed: 1_234_567_890_123_456_789,
+        },
+        Event::AuctionRollOff {
+            auction_id: "a".into(),
+            rounds: vec![vec![
+                Roll {
+                    player: 1,
+                    roll: 40,
+                },
+                Roll {
+                    player: 2,
+                    roll: 12,
+                },
+            ]],
+        },
         Event::RosterCharacterSet {
             player: 1,
             character: nocturnal_core::RosterCharacter {
@@ -207,6 +226,8 @@ const PINNED_KINDS: &[&str] = &[
     "auction.closed",
     "auction.finalized",
     "auction.cancelled",
+    "auction.rolled",
+    "auction.roll_off",
     "roster.character.set",
     "roster.profile.uploaded",
     "roster.character.removed",
@@ -330,6 +351,20 @@ fn an_auction_closed_without_the_added_field_still_loads() {
     match env.event {
         Event::AuctionClosed { ended_ts_ms, .. } => assert_eq!(ended_ts_ms, None),
         other => panic!("{other:?}"),
+    }
+}
+
+/// Roll auctions (2026-09-30) put a third flavor on the wire. The two that
+/// came before keep their strings, and the new one is pinned alongside them.
+#[test]
+fn auction_flavors_are_pinned_on_the_wire() {
+    for (flavor, wire) in [
+        (Flavor::Short, "\"short\""),
+        (Flavor::Long, "\"long\""),
+        (Flavor::Roll, "\"roll\""),
+    ] {
+        assert_eq!(serde_json::to_string(&flavor).unwrap(), wire);
+        assert_eq!(serde_json::from_str::<Flavor>(wire).unwrap(), flavor);
     }
 }
 

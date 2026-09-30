@@ -81,6 +81,7 @@ guild Administrator) · **admin** = Discord Administrator default-perms.
 | `/dpsstatus` | officer | — | Who is sending telemetry, on what Zeal build, last seen (from Ourios, 14 days) |
 | `/startbid` | officer | search, minbid?, numitems?, database? | Short auction flow (below) |
 | `/startlongbid` | officer | search, minbid?, numitems?, duration? (h, default 48), database?, debit? | Long auction; bids via `/bid`. `debit:false` is a free auction (feedback, 2026-09-08): bids and winners as usual, the loot recorded at 0 DKP, nobody charged; the post says so |
+| `/rollauction` | officer | search, numitems?, duration? (h, default: the `bidtime` of a `/startbid` auction), database? | Roll auction (2026-09-30): laid out like a long auction, but members press **I want to roll** for a public 1–100 roll instead of bidding. No minimum bid and no debit; the highest roll wins at the deadline and a tie at the cut is rolled off automatically |
 | `/auctiondetails` | officer | auctionid | Dump bids/winners of a **settled** auction; refused while it is still running; publicly announces the peek in the auction channel (only when it actually showed something) |
 | `/cancelauction` | officer role | auctionid | Void a running auction: no winner, no DKP. Bids stay readable, not republished |
 | `/endauction` | officer role | auctionid | Close and settle now, skipping the wait; the deadline becomes that moment |
@@ -116,7 +117,7 @@ part of the bot's personality; keep the tone (render the emoji properly, E13).
 
 ## Auctions
 
-**Item search** (shared by `/startbid`, `/startlongbid`, `/searchitem`):
+**Item search** (shared by `/startbid`, `/startlongbid`, `/rollauction`, `/searchitem`):
 `database` = `quarm` (default; pqdi.cc JSON API + stat-table scrape) or `takp`
 (HTML scrape). Results: 1 → item embed directly; 2–25 → one button per item
 (30 s picker); 26–40 → plain text list ("refine"); >40 → refused. Item embed:
@@ -141,6 +142,24 @@ longauctionchannel with auction id + relative end time. Bids arrive via `/bid`
 `auctionEnd` (grace period), computes winners, marks finished, edits the embed
 green with winners + anonymized bids. **Legacy never debits these winners** —
 the rewrite does (deliberate change).
+
+**Roll auction** (`/rollauction`, 2026-09-30, no legacy counterpart): posted
+to longauctionchannel like a long auction, with one button, **I want to
+roll**. It lasts `duration` hours, or without one the `bidtime` a `/startbid`
+auction lasts (`/configure`, 60 s by default). A click is a `/random 100`
+(`roll_for_auction`, one per registered member, drawn from the click's
+interaction id so it replays from the log), and the embed lists every roll
+as it lands, highest first, with who rolled it: a roll cannot be outbid, so
+showing it gives nothing away. There is no minimum bid, no main/alt, and no
+debit. At the deadline the scheduler closes and draws in the same cycle,
+with no grace period and no officer confirm: the top `numitems` rolls win;
+when more players tie at the cut than there are items left, exactly those
+players roll again (`auction.roll_off`, from the finalize seed) until the
+tie breaks. The embed turns green with the winner, the roll that won and any
+roll-off rounds; the loot is logged at 0 DKP as "Item (roll auction: rolled
+N[, roll-off M])". `/endauction` draws early, `/cancelauction` voids it, and
+`/auctiondetails` shows the winner, the roll-off and the rolls once it is
+settled.
 
 **Winner rules** (from `Auction.getWinners`/`getTopBids` — the tested logic):
 1. Bids are MAIN or ALT. A MAIN bid "locks" if `amount ≥ minBidToLockForMain`.
@@ -356,6 +375,13 @@ doesn't care where it runs). Paths and the dashboard URL are config
     rank sum. AA index 211 is granted to every Quarm character at rank 3 and
     costs nothing (Ajja: 8 abilities, 18 ranks, 37 points). Uploaded
     profiles are re-applied to their rows on every render, like live ones.
+30. Roll auctions (2026-09-30, requested by Ziglax): `/rollauction` opens a
+    `roll` auction that takes rolls, not bids (`place_bid` on it is refused
+    as `wrong_auction_flavor`, and `roll_for_auction` on a bidding auction
+    likewise). One roll per member (`already_rolled` names the first); the
+    rolls are public as they land. Winners pay nothing whatever `debit`
+    says, and a tie at the cut is settled by an automatic roll-off between
+    the tied players only, recorded as `auction.roll_off`.
 
 ## Resolved decisions (2026-08-21: keep current behaviour throughout)
 

@@ -104,6 +104,10 @@ groups:
             - id: long
               value: 'long'
               stability: development
+            - id: roll
+              value: 'roll'
+              stability: development
+              brief: A /rollauction, won by the highest 1-100 roll instead of a bid.
         stability: development
         brief: Auction flavor in the unified auction state machine.
       - id: nocturnal.raid.id

@@ -3,6 +3,7 @@
 //! the attendance tie-break draw picks from the *tied candidates* (audit E3),
 //! and the draw is deterministic given a recorded seed.
 
+use crate::event::{PlayerId, Roll};
 use crate::state::Bid;
 
 /// Deterministic RNG (splitmix64) so every tie-break is reproducible from the
@@ -25,6 +26,75 @@ impl Rng {
     pub fn below(&mut self, n: usize) -> usize {
         (self.next_u64() % n as u64) as usize
     }
+
+    /// A `/random 100`: 1 to 100 inclusive.
+    pub fn d100(&mut self) -> u32 {
+        self.below(100) as u32 + 1
+    }
+}
+
+/// Roll-off rounds before a draw settles what is still tied. Each round ties
+/// again with odds of at most 1 in 100, so this only makes the loop's end
+/// obvious; it is not a rule anyone will meet.
+const MAX_ROLL_OFF_ROUNDS: usize = 16;
+
+/// A roll auction's winners, highest roll first, and the roll-off rounds
+/// that settled a tie across the cut (empty when there was none).
+///
+/// Everyone above the cut wins. When more players share the cut roll than
+/// slots remain, exactly those players roll again from `rng`, round after
+/// round, until the slots fill without a tie. A tie that does not straddle
+/// the cut (two 90s for two items) needs no roll-off.
+pub fn roll_winners(
+    rolls: &[Roll],
+    num_items: usize,
+    rng: &mut Rng,
+) -> (Vec<PlayerId>, Vec<Vec<Roll>>) {
+    let mut field = rolls.to_vec();
+    // Stable: equal rolls keep the order they were rolled in, so the
+    // candidate order (and with it the draw) is fixed by the log.
+    field.sort_by_key(|r| std::cmp::Reverse(r.roll));
+    let mut open = num_items.max(1);
+    let mut rounds: Vec<Vec<Roll>> = Vec::new();
+    if field.len() <= open {
+        return (field.iter().map(|r| r.player).collect(), rounds);
+    }
+    let mut winners = Vec::with_capacity(open);
+    // Invariant: `field` is sorted high to low and holds more rolls than
+    // there are `open` slots, with at least one slot open.
+    loop {
+        let cut = field[open - 1].roll;
+        let above = field.iter().filter(|r| r.roll > cut).count();
+        winners.extend(field[..above].iter().map(|r| r.player));
+        open -= above;
+        let tied: Vec<PlayerId> = field
+            .iter()
+            .filter(|r| r.roll == cut)
+            .map(|r| r.player)
+            .collect();
+        if tied.len() <= open {
+            winners.extend(tied);
+            break;
+        }
+        if rounds.len() == MAX_ROLL_OFF_ROUNDS {
+            let mut pool = tied;
+            for _ in 0..open {
+                winners.push(pool.remove(rng.below(pool.len())));
+            }
+            break;
+        }
+        let round: Vec<Roll> = tied
+            .into_iter()
+            .map(|player| Roll {
+                player,
+                roll: rng.d100(),
+            })
+            .collect();
+        rounds.push(round.clone());
+        field = round;
+        field.sort_by_key(|r| std::cmp::Reverse(r.roll));
+    }
+    (winners, rounds)
 }
 
 /// Sort descending by amount, stable (mirrors JS `Array.sort`).

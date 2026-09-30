@@ -155,9 +155,10 @@ async fn cycle(s: &Scheduler) -> anyhow::Result<()> {
 
 /// Auction timers, derived from ledger state (hazard B6): an auction past its
 /// deadline closes; a *long* auction closed longer than the legacy grace
-/// period finalizes (which is the debit). Both are idempotent — a rejected
-/// command just means another cycle already did it, and a restart mid-auction
-/// simply resumes here.
+/// period finalizes (which is the debit). A *roll* auction has nothing to
+/// confirm and nobody to debit, so it closes and draws its winner in the same
+/// cycle. All of it is idempotent — a rejected command just means another
+/// cycle already did it, and a restart mid-auction simply resumes here.
 #[tracing::instrument(name = "scheduler.auctions", skip_all, fields(otel.kind = "internal"))]
 async fn auction_cycle(s: &Scheduler) -> anyhow::Result<()> {
     let ledger_guild = s.ledger_guild;
@@ -185,6 +186,13 @@ async fn auction_cycle(s: &Scheduler) -> anyhow::Result<()> {
                             a.deadline_ts_ms + crate::auctions::LONG_AUCTION_GRACE_MS,
                         ))
                     }
+                    // Closed but not drawn yet: a restart between the two
+                    // steps, or an officer's early /endauction.
+                    AuctionStatus::Closed
+                        if a.flavor == Flavor::Roll && a.deadline_ts_ms <= now =>
+                    {
+                        Some((id.clone(), a.flavor, true, a.deadline_ts_ms))
+                    }
                     _ => None,
                 })
                 .collect::<Vec<_>>()
@@ -192,32 +200,45 @@ async fn auction_cycle(s: &Scheduler) -> anyhow::Result<()> {
         .await;
 
     for (auction_id, flavor, finalize, due_ms) in due {
-        let cmd = if finalize {
-            Command::FinalizeAuction {
-                auction_id: auction_id.clone(),
-                // Recorded in the event, so any tie-break draw is reproducible.
-                seed: now as u64,
-            }
-        } else {
-            Command::CloseAuction {
-                auction_id: auction_id.clone(),
-                ended_ts_ms: None,
-            }
+        // A roll auction that closes here is drawn in the same breath.
+        let steps: &[bool] = match (finalize, flavor) {
+            (false, Flavor::Roll) => &[false, true],
+            (false, _) => &[false],
+            (true, _) => &[true],
         };
-        match s.driver.execute(ledger_guild, Actor::System, cmd).await {
-            Ok(_) => {
-                record_drift("auction", due_ms);
-                tracing::info!(
-                    { attr::NOCTURNAL_AUCTION_ID } = auction_id,
-                    { attr::NOCTURNAL_AUCTION_FLAVOR } = ?flavor,
-                    { attr::NOCTURNAL_AUCTION_TIMER_ACTION } =
-                        if finalize { "finalized" } else { "closed" },
-                    "auction timer fired"
-                );
+        let mut changed = false;
+        for &finalize in steps {
+            let cmd = if finalize {
+                Command::FinalizeAuction {
+                    auction_id: auction_id.clone(),
+                    // Recorded in the event, so any tie-break draw is reproducible.
+                    seed: now as u64,
+                }
+            } else {
+                Command::CloseAuction {
+                    auction_id: auction_id.clone(),
+                    ended_ts_ms: None,
+                }
+            };
+            match s.driver.execute(ledger_guild, Actor::System, cmd).await {
+                Ok(_) => {
+                    changed = true;
+                    record_drift("auction", due_ms);
+                    tracing::info!(
+                        { attr::NOCTURNAL_AUCTION_ID } = auction_id,
+                        { attr::NOCTURNAL_AUCTION_FLAVOR } = ?flavor,
+                        { attr::NOCTURNAL_AUCTION_TIMER_ACTION } =
+                            if finalize { "finalized" } else { "closed" },
+                        "auction timer fired"
+                    );
+                }
+                // Another cycle got there first, or an officer already acted.
+                Err(crate::driver::ExecError::Rejected(_)) => break,
+                Err(e) => return Err(anyhow::anyhow!(e.to_string())),
             }
-            // Another cycle got there first, or an officer already acted.
-            Err(crate::driver::ExecError::Rejected(_)) => continue,
-            Err(e) => return Err(anyhow::anyhow!(e.to_string())),
+        }
+        if !changed {
+            continue;
         }
         crate::auctions::refresh(
             s.ctx.http.as_ref(),

@@ -56,7 +56,7 @@ Rules:
 | `raid.kills_recorded` | raid_id, kills[{target, name, killed_ms, evidence}] | From telemetry (2026-09-06), actor `system`: the bosses a raid killed. Evidence, best first: `death` — the server's death packet for that spawn id as the meters reported it into Ourios (`everquest.combat.death`, NewZeal 56010a4+; exact, one per individual, so a boss killed twice is two); `lockout` — the lockout notice's timestamp (exact, but only raiders who earned one get it); `damage` — a table boss took a real share of the night's boss damage, timed by its last damage (within a scrape step). The whole list, replacing; written at `/endraid` and by the half-hourly pass for the last 30 days' raids without one. Feeds the raid page's "What died" and the `/kills` board |
 | `raid.imported` | …, `tick_interval_ms`, `dkp_per_tick`, `event_id`? | Genesis only. The three trailing fields were added 2026-08-26 (defaulted, so older events replay unchanged) because `/backup` has to give them back |
 
-### Auctions (one unified model; `flavor: short | long`)
+### Auctions (one unified model; `flavor: short | long | roll`)
 | Kind | Payload | Notes |
 |---|---|---|
 | `auction.opened` | auction_id, item, flavor, min_bid, deadline, quantity, debit_dkp (absent = true) | The legacy ~80 % duplicated short/long code paths collapse into one state machine |
@@ -64,8 +64,10 @@ Rules:
 | `auction.bid_retracted` | auction_id, player | |
 | `auction.closed` | auction_id, `ended_ts_ms`? | Deadline reached — bidding ends deterministically at this seq; "bid during close window" ambiguity gone. `ended_ts_ms` (added 2026-08-26) is set only by `/endauction` and becomes the deadline, so the recap names when bidding actually stopped |
 | `auction.tie_broken` | auction_id, candidates[], seed, winner | The draw is auditable; candidate set is the *correct* array |
-| `auction.finalized` | auction_id, winners[{player, amount}] | **Is** the debit — fold decrements balances here. No separate charge step to forget |
+| `auction.finalized` | auction_id, winners[{player, amount}] | **Is** the debit — fold decrements balances here. No separate charge step to forget. A `roll` auction's winners are never charged: the loot is logged at 0 DKP with the roll that won it |
 | `auction.cancelled` | auction_id, reason | |
+| `auction.rolled` | auction_id, player, roll (1–100), seed | `roll` auctions only (`/rollauction`, 2026-09-30): the **I want to roll** button. One per player, drawn from `seed` (the click's interaction id), so the roll replays from the log. Shown in the auction's embed as it lands |
+| `auction.roll_off` | auction_id, rounds[[{player, roll}]] | `roll` auctions only: written just ahead of `auction.finalized` when more players tie at the cut than there are items left. Only they roll again, round after round, drawn from the finalize seed. Absent when nothing tied |
 
 ### Telemetry provisioning (dpsbot absorbed)
 | Kind | Payload | Notes |
