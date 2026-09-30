@@ -93,3 +93,6 @@ input[type=search]{width:100%;max-width:360px;padding:9px 12px;border:1px solid 
 .good{color:var(--good);font-weight:700}.warn{color:var(--warn);font-weight:700}
 ul.stale{columns:2;column-gap:24px;margin:8px 0 0;padding-left:18px}ul.stale li{break-inside:avoid;margin:2px 0}
 @media (max-width:600px){ul.stale{columns:1}}
+
+/* DKP standings on the roster (2026-09-30) */
+table.dkp{margin-top:10px}table.dkp td,table.dkp th{padding:4px 10px}

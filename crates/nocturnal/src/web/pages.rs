@@ -729,6 +729,32 @@ pub fn roster(data: &SiteData) -> String {
                 }
             }
         }
+        // DKP standings (2026-09-30): the balances an officer used to open the
+        // sheet for, beside the coverage card and built the same way. Members
+        // with neither a raid nor a balance are left out, so the list is the
+        // guild that raids, not everyone who ever joined the Discord.
+        @let standings = dkp_standings(data);
+        @if !standings.is_empty() {
+            div class="card" {
+                details {
+                    summary { b { "DKP standings" } " · " (standings.len()) " members, highest first" }
+                    div class="tablewrap" { table class="dkp" {
+                        thead { tr {
+                            th { "Member" } th class="num" { "DKP" }
+                            th class="num" title="Best 8 of the last 10 raid weeks" { "Attendance" }
+                            th class="num" { "Raids" } th { "Last active" }
+                        } }
+                        tbody { @for m in &standings { tr {
+                            td { (name_link(&m.name)) }
+                            td class="num brassx" { (fmt(m.dkp)) }
+                            td class="num" { (format!("{:.1}", m.attendance)) "%" }
+                            td class="num" { (m.raids_attended) }
+                            td class="mut" { @if m.last_active_ms > 0 { (ago(data.generated_ms, m.last_active_ms)) } }
+                        } } }
+                    } }
+                }
+            }
+        }
         input type="search" id="rq" placeholder="Filter by member or character" aria-label="Filter roster";
         div class="tablewrap matrix" { table id="rt" {
             thead { tr { th { "Member" } @for c in classes { th class="cls" { (c) } } th { "Discord" } } }
@@ -745,6 +771,18 @@ pub fn roster(data: &SiteData) -> String {
         (discord_box("Add or change a character?"))
     };
     layout_full("Roster", "roster", body, false, true)
+}
+
+/// The roster's DKP card: every member who has raided or holds a balance,
+/// highest DKP first, ties by name so the order never shuffles between renders.
+fn dkp_standings(data: &SiteData) -> Vec<&crate::site::MemberView> {
+    let mut rows: Vec<&crate::site::MemberView> = data
+        .members
+        .values()
+        .filter(|m| m.raids_attended > 0 || m.dkp != 0)
+        .collect();
+    rows.sort_by(|a, b| b.dkp.cmp(&a.dkp).then_with(|| a.name.cmp(&b.name)));
+    rows
 }
 
 pub fn loot(data: &SiteData) -> String {

@@ -243,6 +243,42 @@ mod tests {
         );
     }
 
+    /// The roster's DKP card lists who raided, highest balance first, and
+    /// leaves out anyone with no raids and no balance.
+    #[test]
+    fn the_roster_shows_dkp_standings_highest_first() {
+        let site = fixture();
+        {
+            let mut guard = site.write().unwrap();
+            let data = std::sync::Arc::make_mut(guard.as_mut().unwrap());
+            for (login, name, dkp, raids) in [("shaku", "Shaku", 350, 4), ("idle", "Idler", 0, 0)] {
+                data.members.insert(
+                    login.into(),
+                    MemberView {
+                        name: name.into(),
+                        discord: name.into(),
+                        dkp,
+                        attendance: 40.0,
+                        raids_attended: raids,
+                        last_active_ms: 1_787_853_613_551,
+                        history: vec![],
+                        characters: vec![],
+                    },
+                );
+            }
+        }
+        let body = String::from_utf8(respond("/roster", &site, None).body).unwrap();
+        let card = &body[body.find("DKP standings").expect("the card")..];
+        assert!(
+            card.contains("2 members"),
+            "Shaku and Controels, not the idler"
+        );
+        let shaku = card.find("Shaku").unwrap();
+        let controels = card.find("Controels").unwrap();
+        assert!(shaku < controels, "350 DKP before 201");
+        assert!(!card[..card.find("</table>").unwrap()].contains("Idler"));
+    }
+
     #[test]
     fn assets_never_escape_their_directory() {
         let site = fixture();
