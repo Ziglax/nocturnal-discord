@@ -23,7 +23,7 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 use poise::serenity_prelude as serenity;
@@ -101,7 +101,7 @@ pub fn static_file(path: &str) -> Option<Response> {
                 headers: vec!["location: /spells/".into()],
             });
         }
-        "/spells/" | "/spells/index.html" => (INDEX, "text/html; charset=utf-8"),
+        "/spells/" | "/spells/index.html" => (PAGE.as_bytes(), "text/html; charset=utf-8"),
         "/spells/app.js" => (APP_JS, "text/javascript; charset=utf-8"),
         "/spells/styles.css" => (STYLES, "text/css; charset=utf-8"),
         "/spells/data/spells.js" => (SPELLS_JS, "text/javascript; charset=utf-8"),
@@ -109,11 +109,9 @@ pub fn static_file(path: &str) -> Option<Response> {
         "/spells/LICENSE" => (LICENSE, "text/plain; charset=utf-8"),
         "/spells/config.json" => {
             // Only guildName is read by the page; the ids his PHP needed are
-            // this server's business, not the browser's.
-            return Some(json(
-                "200 OK",
-                serde_json::json!({ "guildName": "Nocturnal" }),
-            ));
+            // this server's business, not the browser's. Empty, because the
+            // site bar above his header already says Nocturnal.
+            return Some(json("200 OK", serde_json::json!({ "guildName": "" })));
         }
         _ => return None,
     };
@@ -124,6 +122,88 @@ pub fn static_file(path: &str) -> Option<Response> {
         headers: vec!["cache-control: no-cache, must-revalidate".into()],
     })
 }
+
+/// His page inside ours: the site's bar on top, the site's fonts, favicon and
+/// light/dark palette, with his files untouched on disk. His stylesheet reads
+/// its colours from a dozen variables, so re-pointing those at the site's
+/// tokens re-themes it; the few literals he wrote are overridden by hand.
+static PAGE: LazyLock<String> = LazyLock::new(|| {
+    let index = std::str::from_utf8(INDEX).expect("index.html is UTF-8");
+    let head = maud::html! {
+        link rel="icon" href=(super::pages::FAVICON);
+        link rel="stylesheet" href=(super::pages::FONTS);
+    }
+    .into_string();
+    let css = shell_css();
+    let nav = super::pages::site_nav("spells").into_string();
+    index
+        .replacen(
+            "<title>Spell Turn-ins</title>",
+            "<title>Spells · Nocturnal</title>",
+            1,
+        )
+        .replacen(
+            r#"<link rel="stylesheet" href="styles.css">"#,
+            &format!(r#"<link rel="stylesheet" href="styles.css">{head}<style>{css}</style>"#),
+            1,
+        )
+        .replacen("<body>", &format!("<body>{nav}"), 1)
+        .replacen(
+            "</body>",
+            &format!("<script>{}</script></body>", super::pages::PAGE_JS),
+            1,
+        )
+});
+
+/// The site's tokens and nav rules, lifted from its stylesheet so the two
+/// never drift, plus the mapping of his variables onto them.
+fn shell_css() -> String {
+    let site = super::pages::CSS;
+    let keep = |l: &&str| {
+        l.starts_with(":root")
+            || l.starts_with("@media (prefers-color-scheme")
+            || l.starts_with("nav")
+            || l.starts_with(".namelink")
+            || l.starts_with("#tip")
+    };
+    let mut css: String = site
+        .lines()
+        .filter(keep)
+        .map(|l| {
+            l.replace("nav{", "nav.site{")
+                .replace("nav .", "nav.site .")
+                .replace("nav a.", "nav.site a.")
+                + "\n"
+        })
+        .collect();
+    css.push_str(SPELLS_THEME);
+    css
+}
+
+const SPELLS_THEME: &str = r#"
+:root{--bg:var(--ground);--bg-raised:var(--surface);--bg-inset:var(--surface-2);--border:var(--line);--border-strong:var(--line-strong);--text-dim:var(--muted);--gold:var(--brass);--gold-dim:var(--line-strong);--ok:var(--good);--bad:var(--low);--spectral:#1F6F99;--glyphed:#6A4FB8;font-size:16px}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--spectral:#7DD3FC;--glyphed:#C4B5FD}}
+:root[data-theme="dark"]{--spectral:#7DD3FC;--glyphed:#C4B5FD}
+body{background:var(--ground);background-image:none;font:16px/1.55 "Atkinson Hyperlegible",system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+nav.site{margin:0 -16px}
+.brand h1{font-family:"Cormorant Garamond",Georgia,serif;font-size:2rem;color:var(--text)}
+.brand h1 .app-name{color:var(--text)}
+.btn{color:var(--surface)}
+.btn.ghost{color:var(--muted)}
+#user-chip>span:first-child,#user-chip>button{display:none}
+.tabs button.active{color:var(--text);border-bottom-color:var(--brass);font-weight:700}
+tr.clickable:hover td{background:var(--surface-2)}
+.badge.spectral,.chip.spectral.selected{background:color-mix(in srgb,var(--spectral) 13%,transparent)}
+.badge.glyphed,.chip.glyphed.selected{background:color-mix(in srgb,var(--glyphed) 14%,transparent)}
+.badge.prio,.chip.selected{background:color-mix(in srgb,var(--brass) 14%,transparent)}
+.badge.ok{background:color-mix(in srgb,var(--good) 13%,transparent)}
+.badge.warn{background:color-mix(in srgb,var(--warn) 13%,transparent)}
+.badge.bad{background:color-mix(in srgb,var(--low) 13%,transparent)}
+.badge.dim{background:color-mix(in srgb,var(--muted) 13%,transparent)}
+.map-tip .map-label{fill:var(--muted)}
+.map-tip .map-marker{stroke:var(--surface)}
+#help-dialog::backdrop{background:rgba(0,0,0,.5)}
+"#;
 
 fn json(status: &'static str, v: serde_json::Value) -> Response {
     Response {
@@ -390,10 +470,29 @@ mod tests {
     }
 
     #[test]
+    fn the_page_wears_the_site_bar_and_palette() {
+        let r = static_file("/spells/").unwrap();
+        let page = String::from_utf8(r.body).unwrap();
+        // Every replacement found its anchor in his index.html.
+        assert!(page.contains("<title>Spells · Nocturnal</title>"));
+        let nav = page.find(r#"<nav class="site">"#).unwrap();
+        assert!(nav < page.find(r#"class="app-header""#).unwrap());
+        assert!(page.contains(r#"href="/spells/" aria-current="page""#));
+        assert!(page.contains(r#"href="/roster""#));
+        assert!(page.contains("nav.site .in{"));
+        assert!(page.contains("--gold:var(--brass)"));
+        assert!(page.contains(r#":root[data-theme="dark"]{--ground:"#));
+        assert!(page.contains("whoami"));
+        assert!(page.find("whoami").unwrap() < page.find("</body>").unwrap());
+        // No bare nav rule escapes onto his tab bar.
+        assert!(!page.contains("\nnav{"));
+    }
+
+    #[test]
     fn config_carries_only_the_guild_name() {
         let r = static_file("/spells/config.json").unwrap();
         let v: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
-        assert_eq!(v, serde_json::json!({ "guildName": "Nocturnal" }));
+        assert_eq!(v, serde_json::json!({ "guildName": "" }));
     }
 
     #[test]

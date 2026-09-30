@@ -8,11 +8,14 @@ use maud::{html, Markup, PreEscaped, DOCTYPE};
 use crate::profiles::Profile;
 use crate::site::{ItemView, RaidView, SiteData};
 
-const CSS: &str = include_str!("site.css");
+pub(crate) const CSS: &str = include_str!("site.css");
+
+/// The site's two faces: Cormorant for the brand, Atkinson for everything else.
+pub(crate) const FONTS: &str = "https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap";
 
 /// Tooltips, the item dialog, the roster filter and sign-out: the little
 /// behaviour every page shares, in one place, with no data of its own.
-const PAGE_JS: &str = r#"
+pub(crate) const PAGE_JS: &str = r#"
 const tip=document.createElement('div');tip.id='tip';tip.hidden=true;document.body.appendChild(tip);
 function placeTip(x,y){const w=tip.offsetWidth,h=tip.offsetHeight;tip.style.left=Math.min(x+14,innerWidth-w-8)+'px';tip.style.top=(y+18+h>innerHeight?y-h-8:y+18)+'px';}
 document.addEventListener('mouseover',e=>{const el=e.target.closest('[data-tip]');if(!el)return;tip.textContent=el.dataset.tip;tip.hidden=false;placeTip(e.clientX,e.clientY);});
@@ -49,22 +52,12 @@ fn layout_full(title: &str, current: &str, body: Markup, island: bool, wide: boo
                 // A tab icon (kilowattfpv, feedback channel, 2026-09-02): a
                 // crescent, inline so it needs no extra request or route.
                 link rel="icon" href=(FAVICON);
-                link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600&family=Atkinson+Hyperlegible:ital,wght@0,400;0,700;1,400&display=swap";
+                link rel="stylesheet" href=(FONTS);
                 style { (PreEscaped(CSS)) }
                 @if island { link rel="stylesheet" href={ "/assets/island.css?v=" (v) }; }
             }
             body {
-                nav { div class="in" {
-                    a class="brand" href="/" { "Nocturnal" }
-                    a class="tab" href="/" aria-current=[(current == "raid").then_some("page")] { "Raid night" }
-                    a class="tab" href="/me" aria-current=[(current == "me").then_some("page")] { "Me" }
-                    a class="tab" href="/roster" aria-current=[(current == "roster").then_some("page")] { "Roster" }
-                    a class="tab" href="/loot" aria-current=[(current == "loot").then_some("page")] { "Loot" }
-                    a class="tab" href="/kills" aria-current=[(current == "kills").then_some("page")] { "Kills" }
-                    a class="tab" href="/spells/" title="Ziglax's spell turn-in tracker" { "Spells" }
-                    a class="tab" href="/perses/" title="The full Perses dashboards" { "Dashboards ↗" }
-                    span class="who" id="who" { "…" }
-                } }
+                (site_nav(current))
                 main id="main" class=[wide.then_some("wide")] { (body) }
                 script { (PreEscaped(PAGE_JS)) }
                 @if island { script type="module" src={ "/assets/island.js?v=" (v) } {} }
@@ -72,6 +65,25 @@ fn layout_full(title: &str, current: &str, body: Markup, island: bool, wide: boo
         }
     };
     doc.into_string()
+}
+
+/// The bar across the top of every page, the spell tracker's included, so
+/// moving between them feels like one site. `current` marks the tab.
+pub(crate) fn site_nav(current: &str) -> Markup {
+    let cur = |tab: &str| (current == tab).then_some("page");
+    html! {
+        nav class="site" { div class="in" {
+            a class="brand" href="/" { "Nocturnal" }
+            a class="tab" href="/" aria-current=[cur("raid")] { "Raid night" }
+            a class="tab" href="/me" aria-current=[cur("me")] { "Me" }
+            a class="tab" href="/roster" aria-current=[cur("roster")] { "Roster" }
+            a class="tab" href="/loot" aria-current=[cur("loot")] { "Loot" }
+            a class="tab" href="/kills" aria-current=[cur("kills")] { "Kills" }
+            a class="tab" href="/spells/" aria-current=[cur("spells")] title="Ziglax's spell turn-in tracker" { "Spells" }
+            a class="tab" href="/perses/" title="The full Perses dashboards" { "Dashboards ↗" }
+            span class="who" id="who" { "…" }
+        } }
+    }
 }
 
 /// Every page is wide now; prose constrains itself with .read.
@@ -243,7 +255,7 @@ pub fn not_ready() -> String {
 }
 
 /// The tab icon: a moon on the site's night ground, as a data URI.
-const FAVICON: &str = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230F1420'/%3E%3Cpath d='M20.5 5.5a10.5 10.5 0 1 0 6 18.3A9 9 0 0 1 20.5 5.5z' fill='%23D2A94B'/%3E%3C/svg%3E";
+pub(crate) const FAVICON: &str = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230F1420'/%3E%3Cpath d='M20.5 5.5a10.5 10.5 0 1 0 6 18.3A9 9 0 0 1 20.5 5.5z' fill='%23D2A94B'/%3E%3C/svg%3E";
 
 /// The drop zone's script: reveal it to the member the page is about, post
 /// the dropped file as the request body, show the server's sentence.
