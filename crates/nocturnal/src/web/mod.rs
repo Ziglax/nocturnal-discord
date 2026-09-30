@@ -11,6 +11,7 @@
 //! nothing about the viewer except what the page asks Perses for itself.
 
 pub mod pages;
+pub mod spells;
 pub mod upload;
 
 use std::path::{Path, PathBuf};
@@ -64,6 +65,9 @@ pub fn respond(path: &str, site: &SiteHandle, assets_dir: Option<&Path>) -> Resp
     let path = path.split('?').next().unwrap_or("/");
     if let Some(rest) = path.strip_prefix("/assets/") {
         return serve_asset(rest, assets_dir);
+    }
+    if path == "/spells" || path.starts_with("/spells/") {
+        return spells::static_file(path).unwrap_or_else(Response::not_found);
     }
     let segs: Vec<String> = path.trim_matches('/').split('/').map(decode).collect();
     let known = matches!(

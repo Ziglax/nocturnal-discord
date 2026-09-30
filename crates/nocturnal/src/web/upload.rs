@@ -42,6 +42,8 @@ pub struct Head {
     pub content_length: usize,
     pub cookie: Option<String>,
     pub filename: Option<String>,
+    /// The spell tracker's CSRF header (`X-Spelltracker: 1`).
+    pub spelltracker: bool,
 }
 
 /// Parse the head of a request from the bytes read so far. `None` until the
@@ -66,6 +68,7 @@ pub fn parse_head(buf: &[u8]) -> Option<(Head, usize)> {
             "content-length" => head.content_length = value.parse().unwrap_or(0),
             "cookie" => head.cookie = Some(value.to_owned()),
             "x-filename" => head.filename = Some(value.to_owned()),
+            "x-spelltracker" => head.spelltracker = value == "1",
             _ => {}
         }
     }
@@ -101,7 +104,7 @@ pub fn reply(status: &'static str, ok: bool, message: &str) -> super::Response {
 
 /// Who Perses says holds these cookies: the login (Discord username), or
 /// nothing when not signed in or Perses is unreachable.
-async fn whoami(cookie: &str) -> Option<String> {
+pub(crate) async fn whoami(cookie: &str) -> Option<String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()

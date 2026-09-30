@@ -214,7 +214,7 @@ pub async fn deaths_in_window(
 /// An RFC 3339 instant at second precision, UTC, without a date crate: the
 /// civil-from-days arithmetic (Hinnant), pinned by a test against a known
 /// instant. `None` before the epoch.
-fn rfc3339(ms: i64) -> Option<String> {
+pub(crate) fn rfc3339(ms: i64) -> Option<String> {
     if ms < 0 {
         return None;
     }

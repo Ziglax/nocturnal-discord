@@ -244,12 +244,27 @@ fn main() -> anyhow::Result<()> {
                 site: site_handle.clone(),
                 rt: rt.handle().clone(),
             });
+        // Ziglax's spell tracker (2026-09-30): officers are read from Discord
+        // roles, so it needs the bot's own REST client and the server id.
+        let spells = match (cfg.discord.guild_id, offline) {
+            (Some(discord_guild), false) => Some(std::sync::Arc::new(web::spells::SpellsCtx::new(
+                rt.handle().clone(),
+                site_handle.clone(),
+                driver.clone(),
+                std::sync::Arc::new(poise::serenity_prelude::Http::new(&Config::discord_token()?)),
+                discord_guild,
+                cfg.discord.data_guild_id.unwrap_or(discord_guild),
+                &cfg.data.dir,
+            ))),
+            _ => None,
+        };
         health::serve(
             bind,
             readiness.clone(),
             site_handle.clone(),
             cfg.roster.assets_dir.clone(),
             upload,
+            spells,
         )?;
     }
 

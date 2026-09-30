@@ -14,7 +14,11 @@ out="$DEST/nocturnal-$stamp.tar.gz"
 # The WAL is append-only and every record is checksummed, so a tar taken while
 # the bot is running is consistent: a record either made it or it did not, and
 # replay truncates a torn tail exactly as it would after a crash.
-tar -C "$DATA_DIR" -czf "$out.tmp" events wal
+# The spell tracker's shared document (2026-09-30) sits beside the ledger; it
+# is written by rename, so a copy is always a whole document.
+extra=""
+[ -f "$DATA_DIR/spells-state.json" ] && extra="spells-state.json"
+tar -C "$DATA_DIR" -czf "$out.tmp" events wal $extra
 mv "$out.tmp" "$out"
 
 # Members' personal Perses projects (the u-<name> dashboards /dpstoken grants)

@@ -56,6 +56,7 @@ pub fn serve(
     site: crate::site::SiteHandle,
     assets_dir: Option<std::path::PathBuf>,
     upload: Option<crate::web::upload::UploadCtx>,
+    spells: Option<std::sync::Arc<crate::web::spells::SpellsCtx>>,
 ) -> anyhow::Result<()> {
     let listener = TcpListener::bind(bind)?;
     tracing::info!(
@@ -102,7 +103,28 @@ pub fn serve(
                     let _ = stream.write_all(out.as_bytes());
                     let _ = stream.write_all(&r.body);
                 };
-                // The one POST: a member's Zeal export for the site's drop zone.
+                // The spell tracker's API (2026-09-30): its own GETs and its
+                // one POST, the shared state, capped at the size his host took.
+                if let (Some(ctx), true) = (&spells, path.starts_with("/spells/api/")) {
+                    let r = if head.content_length > crate::web::spells::MAX_BODY {
+                        crate::web::Response {
+                            status: "413 Content Too Large",
+                            content_type: "application/json; charset=utf-8",
+                            body: br#"{"error":"State too large."}"#.to_vec(),
+                            headers: vec!["cache-control: no-store".into()],
+                        }
+                    } else {
+                        let body = crate::web::upload::read_body(
+                            &mut stream,
+                            &buf[body_at.min(buf.len())..],
+                            head.content_length,
+                        );
+                        crate::web::spells::handle(ctx, &head, &body)
+                    };
+                    write_response(&mut stream, r);
+                    continue;
+                }
+                // The one other POST: a member's Zeal export for the site's drop zone.
                 if head.method == "POST" {
                     let r = match (&upload, path.split('?').next()) {
                         (Some(ctx), Some("/upload")) => {

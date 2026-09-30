@@ -61,6 +61,7 @@ fn layout_full(title: &str, current: &str, body: Markup, island: bool, wide: boo
                     a class="tab" href="/roster" aria-current=[(current == "roster").then_some("page")] { "Roster" }
                     a class="tab" href="/loot" aria-current=[(current == "loot").then_some("page")] { "Loot" }
                     a class="tab" href="/kills" aria-current=[(current == "kills").then_some("page")] { "Kills" }
+                    a class="tab" href="/spells/" title="Ziglax's spell turn-in tracker" { "Spells" }
                     a class="tab" href="/perses/" title="The full Perses dashboards" { "Dashboards ↗" }
                     span class="who" id="who" { "…" }
                 } }

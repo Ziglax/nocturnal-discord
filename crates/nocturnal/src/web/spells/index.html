@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Spell Turn-ins</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script src="data/spells.js"></script>
+  <script src="data/pok_map.js"></script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <h1><span id="guild-name"></span><span class="app-name">Spell Turn-ins</span></h1>
+      <p class="tagline">Planes of Power &middot; Project Quarm &middot; quartermaster tracker</p>
+    </div>
+    <div class="header-actions">
+      <span id="user-chip" class="user-chip"></span>
+      <button class="btn ghost" id="export-state">Export state</button>
+      <label class="btn ghost" for="state-input" id="import-label">
+        Import state
+        <input type="file" id="state-input" accept=".json" hidden>
+      </label>
+      <button class="btn ghost" id="help-btn" title="How it works">?</button>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs">
+    <button data-tab="dashboard" class="active">Dashboard</button>
+    <button data-tab="priorities">Priorities</button>
+    <button data-tab="weights">Class Weights</button>
+    <button data-tab="pools">Spell Pools</button>
+    <button data-tab="log">Turn-in Log</button>
+  </nav>
+
+  <main id="view"></main>
+
+  <dialog id="help-dialog">
+    <div class="help-head">
+      <h2>How it works</h2>
+      <button class="btn ghost small" id="help-close">Close</button>
+    </div>
+    <div class="help-body">
+      <h3>The items</h3>
+      <p><b>Spectral Parchment</b> &rarr; random 63-64 spell. <b>Glyphed Rune Word</b> &rarr; random 65 spell.
+        Each is handed to the class NPC in the Plane of Knowledge and rolls on that class's fixed pool
+        (odds shown as 1/pool size). Pools are verified against <a href="https://www.pqdi.cc" target="_blank" rel="noopener">pqdi.cc</a>.</p>
+      <h3>Setup</h3>
+      <p>Dashboard: set the parchment/rune stock. Priorities: order the class cards (drag or rank number)
+        and build each class's ordered spell list, with the copies wanted per spell.
+        Class Weights: set the mains (M1 and M2) per class and the M2 weight ratio.</p>
+      <h3>Phase 1: priorities</h3>
+      <p>Every listed spell has a priority tier (P1, P2, ...) and a wanted-copy count; several spells of
+        one class may share a tier and are secured together. A tier is fully served before the next one
+        starts: round 1 secures one copy of each class's P1 spells (walking the class cards in order),
+        the following rounds secure their remaining copies, and only then do the P2 spells start.
+        Phase 1 ends when every listed spell has all its wanted copies.</p>
+      <h3>Phase 2: fair share</h3>
+      <p>Turn-ins are spread by <b>(M1 + ratio &times; M2) &times; pool size</b> (the class's 63-65 spell count:
+        casters have bigger pools than hybrids; an M2 main counts at the configurable ratio, 50% by default).
+        All logged turn-ins count, including phase 1's. Feed the class with the highest deficit.</p>
+      <h3>Recording &amp; duplicates</h3>
+      <p>Follow the Dashboard queue and record each result in three clicks (item &rarr; class &rarr; spell);
+        stock decrements automatically and requires stock in hand. Copies beyond a spell's wanted count,
+        or repeats of unlisted spells, are flagged <b>roll it</b>: roll them off among mains in raid/Discord.</p>
+      <p><b>obtained*</b> / <b>dropped elsewhere</b>: the same scroll came out of another class's pool
+        (hover for details); a multiclass scroll can be handed to any class that scribes it.
+        Tracking stays per class: if you allocate such a copy, lower that spell's wanted count.</p>
+      <h3>Your data</h3>
+      <p>In local mode everything lives in this browser (localStorage). Hosted behind Discord sign-in,
+        the state is shared on the server: officers write, raiders read.
+        Use Export/Import state to back up or hand over.</p>
+    </div>
+  </dialog>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
